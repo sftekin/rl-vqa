@@ -1,2 +1,2 @@
-data/ocr/*
-!data/ocr/.gitkeep
+results/*
+!results/.gitkeep
