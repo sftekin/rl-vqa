@@ -4,7 +4,7 @@ def replace_image_tags(text):
     return re.sub(r"<image \d>", "<image>", text)
 
 
-def apply_processor(processor, text):
+def apply_processor(processor, text, add_image_field=False):
     conversation = [
         {
         "role": "user",
@@ -13,6 +13,8 @@ def apply_processor(processor, text):
             ],
         },
     ]
+    if add_image_field:
+        conversation[0]["content"].append({"type": "image"})
     prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
     return prompt
 
@@ -36,12 +38,11 @@ def construct_prompt(sample, config, processor, ds_name):
     if "mmmu" in ds_name:
         question = replace_image_tags(sample['question'])
         options = eval(sample['options'])
-    else:
-        question, options = sample["question"], options["options"]
-
-    if ds_name == "mmmu":
+        add_image_field = False
         category = sample['question_type']
     else:
+        question, options = sample["question"], sample["options"]
+        add_image_field = True
         category = 'multiple-choice'
         sample["question_type"] = category
 
@@ -61,7 +62,8 @@ def construct_prompt(sample, config, processor, ds_name):
         empty_prompt_sample_structure = config['short_ans_example_format']
         empty_prompt = empty_prompt_sample_structure.format(question)
     
-    prompt = apply_processor(processor=processor, text=empty_prompt)
+    prompt = apply_processor(
+        processor=processor, text=empty_prompt, add_image_field=add_image_field)
     res_dict = {
         "prompt": prompt,
         'correct_choice': sample["answer"],
