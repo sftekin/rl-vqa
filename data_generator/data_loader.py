@@ -41,6 +41,7 @@ class DataCreator:
                 ds = ds.rename_column("questions", "question")
             else:
                 ds = ds.rename_column("correct_choice_idx", "answer")
+                ds = ds.rename_column("choices", "options")
             self.ds.append(ds)
         elif dataset_name == "mmmu":
             pbar = tqdm.tqdm(self.mmmu_subsets, desc="Loading MMMU dataset")
@@ -52,6 +53,9 @@ class DataCreator:
             self.ds.append(
                 load_dataset(self.data_domains[dataset_name],
                              "standard (4 options)", token=hf_token))
+    
+    def __len__(self):
+        return len(self.ds)
 
     def get(self, split_type="train"):
         for ds in self.ds:

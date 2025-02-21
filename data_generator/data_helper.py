@@ -18,7 +18,7 @@ def apply_processor(processor, text):
 
 
 
-def construct_prompt(sample, config, processor):
+def construct_prompt(sample, config, processor, ds_name):
     """
     sample = {
         "question":,
@@ -33,11 +33,21 @@ def construct_prompt(sample, config, processor):
     }
 
     """
-    question = replace_image_tags(sample['question'])
-    options = eval(sample['options'])
+    if "mmmu" in ds_name:
+        question = replace_image_tags(sample['question'])
+        options = eval(sample['options'])
+    else:
+        question, options = sample["question"], options["options"]
+
+    if ds_name == "mmmu":
+        category = sample['question_type']
+    else:
+        category = 'multiple-choice'
+        sample["question_type"] = category
+
     example = ""
     prediction_range = []
-    if sample['question_type'] == 'multiple-choice':
+    if  category == 'multiple-choice':
         start_chr = 'A'
         index2ans = {}
         for option in options:
