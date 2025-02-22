@@ -39,16 +39,16 @@ def construct_prompt(sample, config, processor, ds_name):
         question = replace_image_tags(sample['question'])
         options = eval(sample['options'])
         add_image_field = False
-        category = sample['question_type']
     else:
         question, options = sample["question"], sample["options"]
         add_image_field = True
-        category = 'multiple-choice'
-        sample["question_type"] = category
+
+    if "question_type" not in sample.keys():
+        sample["question_type"] = 'multiple-choice'
 
     example = ""
     prediction_range = []
-    if  category == 'multiple-choice':
+    if sample["question_type"] == 'multiple-choice':
         start_chr = 'A'
         index2ans = {}
         for option in options:

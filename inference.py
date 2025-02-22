@@ -103,11 +103,11 @@ def run(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='inference scripts for the trained models')
-    parser.add_argument("--task_name", type=str, default="okvqa", 
+    parser.add_argument("--task_name", type=str, default="mmmu_pro", 
                         choices=["ocr", "okvqa", "mmmu", "mmmu_pro"])
     parser.add_argument("--model_name", type=str, default="llava-v1.6-vicuna-13b-hf",
                         choices=["llava-v1.6-vicuna-7b-hf", "llava-v1.6-vicuna-13b-hf"])
-    parser.add_argument("--dataset_type", type= str, default="validation", choices=["test", "validation", "train"])
-    parser.add_argument("--num_samples", type=int, default=1500)
+    parser.add_argument("--dataset_type", type= str, default="test", choices=["test", "validation", "train"])
+    parser.add_argument("--num_samples", type=int, default=15000)
     arguments = parser.parse_args()
     run(arguments)
