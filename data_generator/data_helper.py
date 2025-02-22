@@ -1,7 +1,7 @@
 import re
 
 def replace_image_tags(text):
-    return re.sub(r"<image \d>", "<image>", text)
+    return re.sub(r"<image \d>", "", text)
 
 
 def apply_processor(processor, text, add_image_field=False):
@@ -9,13 +9,15 @@ def apply_processor(processor, text, add_image_field=False):
         {
         "role": "user",
         "content": [
-            {"type": "text", "text": text},
+            {
+                "type": "text", 
+                "text": text
+            },
             ],
         },
     ]
-    if add_image_field:
-        conversation[0]["content"].append({"type": "image"})
-    prompt = processor.apply_chat_template(conversation, add_generation_prompt=True)
+    conversation[0]["content"].append({"type": "image"})
+    prompt = processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
     return prompt
 
 

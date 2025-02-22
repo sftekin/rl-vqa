@@ -20,13 +20,17 @@ import torch.nn.functional as F
 from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
 from data_generator.data_loader import DataCreator
 from data_generator.data_helper import construct_prompt
+from transformers import AutoProcessor, AutoModelForImageTextToText
 
 
 def load_model(model_path):
     if "llava" in model_path:
         processor = LlavaNextProcessor.from_pretrained(model_path)
         model = LlavaNextForConditionalGeneration.from_pretrained(
-            model_path, torch_dtype=torch.float16, low_cpu_mem_usage=True, token=hf_token) 
+            model_path, torch_dtype=torch.float16, low_cpu_mem_usage=True, token=hf_token)
+    elif "Qwen" in model_path:
+        processor = AutoProcessor.from_pretrained(model_path)
+        model = AutoModelForImageTextToText.from_pretrained(model_path)
     return processor, model
 
 
@@ -55,8 +59,7 @@ def run(args):
                 images = [example["image"]]
             res_dict = construct_prompt(
                 example, config=prompt_formats, processor=processor, ds_name=args.task_name)
-            if (len(images) != 1 or example["question_type"] == "open" 
-                or res_dict["prompt"].count("<image>") != 1):
+            if (len(images) != 1 or example["question_type"] == "open"):
                 continue
             inputs = processor(images=images[0], text=res_dict["prompt"], return_tensors="pt").to("cuda")
             output = model.generate(
@@ -105,8 +108,8 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='inference scripts for the trained models')
     parser.add_argument("--task_name", type=str, default="mmmu_pro", 
                         choices=["ocr", "okvqa", "mmmu", "mmmu_pro"])
-    parser.add_argument("--model_name", type=str, default="llava-v1.6-vicuna-13b-hf",
-                        choices=["llava-v1.6-vicuna-7b-hf", "llava-v1.6-vicuna-13b-hf"])
+    parser.add_argument("--model_name", type=str, default="Qwen2.5-VL-7B-Instruct",
+                        choices=["llava-v1.6-vicuna-7b-hf", "llava-v1.6-vicuna-13b-hf", "Qwen2.5-VL-7B-Instruct"])
     parser.add_argument("--dataset_type", type= str, default="test", choices=["test", "validation", "train"])
     parser.add_argument("--num_samples", type=int, default=15000)
     arguments = parser.parse_args()
