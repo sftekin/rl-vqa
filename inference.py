@@ -45,40 +45,44 @@ def run(args):
 
     ds_creator = DataCreator(args.task_name)
     questions, generated_outputs, ground_truths, choice_probs = [], [], [], []
+    max_num_samples = args.num_samples
     num_samples = 0
-    while(num_samples < args.num_samples):
-        for ds in tqdm.tqdm(ds_creator.get(args.dataset_type), total=len(ds_creator)):
-            for example in tqdm.tqdm(ds):
-                if "mmmu" in args.task_name:
-                    images = [example[f"image_{i}"] for i in range(1, 8) if example[f"image_{i}"] is not None]
-                else:
-                    images = [example["image"]]
-                res_dict = construct_prompt(
-                    example, config=prompt_formats, processor=processor, ds_name=args.task_name)
-                if (len(images) != 1 or example["question_type"] == "open" 
-                    or res_dict["prompt"].count("<image>") != 1):
-                    continue
-                inputs = processor(images=images[0], text=res_dict["prompt"], return_tensors="pt").to("cuda")
-                output = model.generate(
-                    **inputs, 
-                    max_new_tokens=100, 
-                    temperature=0.7, 
-                    return_dict_in_generate=True, 
-                    output_scores=True
-                    )
-                output_txt = processor.decode(output["sequences"][0], skip_special_tokens=True)
-                output_txt = output_txt[len(res_dict["prompt"]) - 7:]
-                probs_first_token = torch.nn.functional.softmax(output["scores"][0], dim=-1)
-                token_ids = [processor.tokenizer.encode(letter)[1] for letter in res_dict["prediction_range"]]
-                choice_probs.append(probs_first_token[0, token_ids])
-                generated_outputs.append(output_txt)
-                questions.append(example["question"])
-                if "okvqa" == args.task_name:
-                    ans = res_dict["prediction_range"][example["answer"]]
-                else:
-                    ans = example["answer"]
-                ground_truths.append(ans)
-                num_samples += 1
+    for ds in tqdm.tqdm(ds_creator.get(args.dataset_type), total=len(ds_creator)):
+        for example in tqdm.tqdm(ds):
+            if "mmmu" in args.task_name:
+                images = [example[f"image_{i}"] for i in range(1, 8) if example[f"image_{i}"] is not None]
+            else:
+                images = [example["image"]]
+            res_dict = construct_prompt(
+                example, config=prompt_formats, processor=processor, ds_name=args.task_name)
+            if (len(images) != 1 or example["question_type"] == "open" 
+                or res_dict["prompt"].count("<image>") != 1):
+                continue
+            inputs = processor(images=images[0], text=res_dict["prompt"], return_tensors="pt").to("cuda")
+            output = model.generate(
+                **inputs, 
+                max_new_tokens=100, 
+                temperature=0.7, 
+                return_dict_in_generate=True, 
+                output_scores=True
+                )
+            output_txt = processor.decode(output["sequences"][0], skip_special_tokens=True)
+            output_txt = output_txt[len(res_dict["prompt"]) - 7:]
+            probs_first_token = torch.nn.functional.softmax(output["scores"][0], dim=-1)
+            token_ids = [processor.tokenizer.encode(letter)[1] for letter in res_dict["prediction_range"]]
+            choice_probs.append(probs_first_token[0, token_ids])
+            generated_outputs.append(output_txt)
+            questions.append(example["question"])
+            if "okvqa" == args.task_name:
+                ans = res_dict["prediction_range"][example["answer"]]
+            else:
+                ans = example["answer"]
+            ground_truths.append(ans)
+            num_samples += 1
+            if num_samples > max_num_samples:
+                break
+        if num_samples > max_num_samples:
+            break
 
     data_df = pd.DataFrame({
         "question": questions,
@@ -101,9 +105,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='inference scripts for the trained models')
     parser.add_argument("--task_name", type=str, default="okvqa", 
                         choices=["ocr", "okvqa", "mmmu", "mmmu_pro"])
-    parser.add_argument("--model_name", type=str, default="llava-v1.6-vicuna-7b-hf",
+    parser.add_argument("--model_name", type=str, default="llava-v1.6-vicuna-13b-hf",
                         choices=["llava-v1.6-vicuna-7b-hf", "llava-v1.6-vicuna-13b-hf"])
-    parser.add_argument("--dataset_type", type= str, default="train", choices=["test", "validation", "train"])
+    parser.add_argument("--dataset_type", type= str, default="validation", choices=["test", "validation", "train"])
     parser.add_argument("--num_samples", type=int, default=1500)
     arguments = parser.parse_args()
     run(arguments)
