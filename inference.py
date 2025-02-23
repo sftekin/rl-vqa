@@ -22,6 +22,8 @@ from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
 from data_generator.data_loader import DataCreator
 from data_generator.data_helper import construct_prompt
 from transformers import AutoProcessor, AutoModelForImageTextToText
+from transformers import AutoModel, AutoTokenizer
+from model_helper import load_image
 
 
 def save_checkpoint(save_dir, model_name, data_dict, step_num=None):
@@ -66,6 +68,15 @@ def load_model(model_path):
         max_pixels = 1280 * 28 * 28
         processor = AutoProcessor.from_pretrained(model_path, min_pixels=min_pixels, max_pixels=max_pixels)
         model = AutoModelForImageTextToText.from_pretrained(model_path)
+    elif "InternVL2" in model_path:
+        model = AutoModel.from_pretrained(
+                model_path,
+                torch_dtype=torch.bfloat16,
+                low_cpu_mem_usage=True,
+                use_flash_attn=True,
+                trust_remote_code=True).eval().cuda()
+        processor = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
+
     return processor, model
 
 
@@ -93,25 +104,41 @@ def run(args):
                 images = [example[f"image_{i}"] for i in range(1, 8) if example[f"image_{i}"] is not None]
             else:
                 images = [example["image"]]
-            res_dict = construct_prompt(
-                example, config=prompt_formats, processor=processor, ds_name=args.task_name)
-            if (len(images) != 1 or example["question_type"] == "open"):
+
+            if len(images) != 1 or example.get("question_type", "multiple-choice") == "open":
                 continue
-            inputs = processor(
-                images=check_im_size(images[0]), 
-                text=[res_dict["prompt"]], 
-                return_tensors="pt").to("cuda")
-            output = model.generate(
-                **inputs, 
-                max_new_tokens=100, 
-                temperature=0.7, 
-                return_dict_in_generate=True, 
-                output_scores=True
+
+            if "InternVL2" not in args.model_name:
+                res_dict = construct_prompt(
+                    example, config=prompt_formats, processor=processor, ds_name=args.task_name
+                    )
+                
+                inputs = processor(
+                    images=check_im_size(images[0]), 
+                    text=[res_dict["prompt"]], 
+                    return_tensors="pt").to("cuda")
+                
+                output = model.generate(
+                    **inputs, 
+                    max_new_tokens=100, 
+                    temperature=0.7, 
+                    return_dict_in_generate=True, 
+                    output_scores=True
+                    )
+                
+                output_txt = processor.decode(output["sequences"][0], skip_special_tokens=True)
+            else:
+                res_dict = construct_prompt(
+                    example, config=prompt_formats, processor=None, ds_name=args.task_name
                 )
-            output_txt = processor.decode(output["sequences"][0], skip_special_tokens=True)
-            output_txt = output_txt[-7:]
+                generation_config = dict(max_new_tokens=100, return_dict_in_generate=True, output_scores=True)
+                pixel_values = load_image(images[0]).to(torch.bfloat16).cuda()
+                output = model.chat(processor, pixel_values, res_dict["prompt"], generation_config)
+                output_txt = processor.decode(output["sequences"][0], skip_special_tokens=True)
+
+            # output_txt = output_txt[-7:]
             probs_first_token = torch.nn.functional.softmax(output["scores"][0], dim=-1)
-            token_ids = [processor.tokenizer.encode(letter)[0] for letter in res_dict["prediction_range"]]
+            token_ids = [processor.encode(f"({letter}")[1] for letter in res_dict["prediction_range"]]
             choice_probs.append(probs_first_token[0, token_ids])
             generated_outputs.append(output_txt)
             questions.append(example["question"])
@@ -129,7 +156,7 @@ def run(args):
                 "choice_probs": choice_probs
             }
 
-            if num_samples % 100 == 0 and num_samples > 0:
+            if num_samples % 500 == 0 and num_samples > 0:
                 save_checkpoint(save_dir, args.model_name, data_dict, num_samples)
 
             if num_samples > max_num_samples:
@@ -143,11 +170,11 @@ def run(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='inference scripts for the trained models')
-    parser.add_argument("--task_name", type=str, default="mmmu_pro", 
+    parser.add_argument("--task_name", type=str, default="mmmu", 
                         choices=["ocr", "okvqa", "mmmu", "mmmu_pro"])
-    parser.add_argument("--model_name", type=str, default="Qwen2.5-VL-7B-Instruct",
-                        choices=["llava-v1.6-vicuna-7b-hf", "llava-v1.6-vicuna-13b-hf", "Qwen2.5-VL-7B-Instruct"])
-    parser.add_argument("--dataset_type", type= str, default="test", choices=["test", "validation", "train"])
-    parser.add_argument("--num_samples", type=int, default=15000)
+    parser.add_argument("--model_name", type=str, default="InternVL2-8B",
+                        choices=["llava-v1.6-vicuna-7b-hf", "llava-v1.6-vicuna-13b-hf", "Qwen2.5-VL-7B-Instruct", "InternVL2-8B"])
+    parser.add_argument("--dataset_type", type= str, default="validation", choices=["test", "validation", "train"])
+    parser.add_argument("--num_samples", type=int, default=1500)
     arguments = parser.parse_args()
     run(arguments)

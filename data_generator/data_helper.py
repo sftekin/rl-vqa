@@ -1,7 +1,7 @@
 import re
 
 def replace_image_tags(text):
-    return re.sub(r"<image \d>", "", text)
+    return re.sub(r"<image \d>", "<image>", text)
 
 
 def apply_processor(processor, text, add_image_field=False):
@@ -65,12 +65,16 @@ def construct_prompt(sample, config, processor, ds_name):
         empty_prompt_sample_structure = config['short_ans_example_format']
         empty_prompt = empty_prompt_sample_structure.format(question)
     
-    prompt = apply_processor(
-        processor=processor, text=empty_prompt, add_image_field=add_image_field)
+    if processor is not None:
+        prompt = apply_processor(
+            processor=processor, text=empty_prompt, add_image_field=add_image_field)
+    else:
+        prompt = empty_prompt
     res_dict = {
         "prompt": prompt,
         'correct_choice': sample["answer"],
         "prediction_range": prediction_range
     }
     return res_dict
+
 
