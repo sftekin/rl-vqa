@@ -13,6 +13,7 @@ from peft import PeftModel
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
+from PIL import Image
 
 from configs import hf_token, prompt_formats, llm_domains
 import torch.nn.functional as F
@@ -23,15 +24,50 @@ from data_generator.data_helper import construct_prompt
 from transformers import AutoProcessor, AutoModelForImageTextToText
 
 
+def save_checkpoint(save_dir, model_name, data_dict, step_num=None):
+    data_df = pd.DataFrame({
+        "question":data_dict["questions"],
+        "answer": data_dict["ground_truths"],
+        "generated_outputs": data_dict["generated_outputs"]
+    })
+
+    # not every question has 4 choices, thus, pad the small length with 0.
+    choice_probs = torch.nn.utils.rnn.pad_sequence(
+        data_dict["choice_probs"], batch_first=True, padding_value=0).cpu().numpy()
+    
+    if step_num is None:
+        output_path = os.path.join(save_dir, f"{model_name}_output.csv")
+        prob_path = os.path.join(save_dir, f"{model_name}_prob.npy")
+    else:
+        output_path = os.path.join(save_dir, f"{model_name}_output_{step_num}.csv")
+        prob_path = os.path.join(save_dir, f"{model_name}_prob_{step_num}.npy")
+
+    # save model
+    data_df.to_csv(output_path)
+    np.save(prob_path, choice_probs)
+
+
+def check_im_size(image):
+    new_width = max(image.width, 28)
+    new_height = max(image.height, 28)
+
+    # Resize the image
+    image = image.resize((new_width, new_height), Image.BILINEAR)
+    return image
+
+
 def load_model(model_path):
     if "llava" in model_path:
         processor = LlavaNextProcessor.from_pretrained(model_path)
         model = LlavaNextForConditionalGeneration.from_pretrained(
             model_path, torch_dtype=torch.float16, low_cpu_mem_usage=True, token=hf_token)
     elif "Qwen" in model_path:
-        processor = AutoProcessor.from_pretrained(model_path)
+        min_pixels = 256 * 28 * 28
+        max_pixels = 1280 * 28 * 28
+        processor = AutoProcessor.from_pretrained(model_path, min_pixels=min_pixels, max_pixels=max_pixels)
         model = AutoModelForImageTextToText.from_pretrained(model_path)
     return processor, model
+
 
 
 def run(args):
@@ -61,7 +97,10 @@ def run(args):
                 example, config=prompt_formats, processor=processor, ds_name=args.task_name)
             if (len(images) != 1 or example["question_type"] == "open"):
                 continue
-            inputs = processor(images=images[0], text=res_dict["prompt"], return_tensors="pt").to("cuda")
+            inputs = processor(
+                images=check_im_size(images[0]), 
+                text=[res_dict["prompt"]], 
+                return_tensors="pt").to("cuda")
             output = model.generate(
                 **inputs, 
                 max_new_tokens=100, 
@@ -70,9 +109,9 @@ def run(args):
                 output_scores=True
                 )
             output_txt = processor.decode(output["sequences"][0], skip_special_tokens=True)
-            output_txt = output_txt[len(res_dict["prompt"]) - 7:]
+            output_txt = output_txt[-7:]
             probs_first_token = torch.nn.functional.softmax(output["scores"][0], dim=-1)
-            token_ids = [processor.tokenizer.encode(letter)[1] for letter in res_dict["prediction_range"]]
+            token_ids = [processor.tokenizer.encode(letter)[0] for letter in res_dict["prediction_range"]]
             choice_probs.append(probs_first_token[0, token_ids])
             generated_outputs.append(output_txt)
             questions.append(example["question"])
@@ -82,26 +121,24 @@ def run(args):
                 ans = example["answer"]
             ground_truths.append(ans)
             num_samples += 1
+
+            data_dict = {
+                "questions": questions,
+                "ground_truths": ground_truths,
+                "generated_outputs": generated_outputs,
+                "choice_probs": choice_probs
+            }
+
+            if num_samples % 100 == 0 and num_samples > 0:
+                save_checkpoint(save_dir, args.model_name, data_dict, num_samples)
+
             if num_samples > max_num_samples:
                 break
         if num_samples > max_num_samples:
             break
 
-    data_df = pd.DataFrame({
-        "question": questions,
-        "answer": ground_truths,
-        "generated_outputs": generated_outputs
-    })
-
-    # not every question has 4 choices, thus, pad the small length with 0.
-    choice_probs = torch.nn.utils.rnn.pad_sequence(
-        choice_probs, batch_first=True, padding_value=0).cpu().numpy()
-    output_path = os.path.join(save_dir, f"{args.model_name}_output.csv")
-    prob_path = os.path.join(save_dir, f"{args.model_name}_prob.npy")
-
-    # save model
-    data_df.to_csv(output_path)
-    np.save(prob_path, choice_probs)
+    # Final Save
+    save_checkpoint(save_dir, args.model_name, data_dict)
 
 
 if __name__ == "__main__":

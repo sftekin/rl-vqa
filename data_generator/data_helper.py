@@ -9,6 +9,7 @@ def apply_processor(processor, text, add_image_field=False):
         {
         "role": "user",
         "content": [
+            {"type": "image"},
             {
                 "type": "text", 
                 "text": text
@@ -16,7 +17,7 @@ def apply_processor(processor, text, add_image_field=False):
             ],
         },
     ]
-    conversation[0]["content"].append({"type": "image"})
+    # conversation[0]["content"].append({"type": "image"})
     prompt = processor.apply_chat_template(conversation, tokenize=False, add_generation_prompt=True)
     return prompt
 
