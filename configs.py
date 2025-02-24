@@ -11,7 +11,9 @@ llm_domains = {
     "llava-v1.6-vicuna-7b-hf": "llava-hf",
     "llava-v1.6-vicuna-13b-hf": "llava-hf",
     "Qwen2.5-VL-7B-Instruct": "Qwen",
-    'InternVL2-8B': "OpenGVLab"
+    'InternVL2-8B': "OpenGVLab",
+    'deepseek-vl2-tiny': "deepseek-ai",
+    'deepseek-vl2-small': "deepseek-ai"
 }
 
 

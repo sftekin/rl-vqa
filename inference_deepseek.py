@@ -1,29 +1,22 @@
 import os
-import time
 import tqdm
-import glob
 import argparse
 from configs import hf_token, HF_CACHE, llm_domains
 os.environ['HF_HOME'] = HF_CACHE
 
 import torch
-import transformers
-from transformers import StoppingCriteria, StoppingCriteriaList
-from peft import PeftModel
 import pandas as pd
 import numpy as np
-import matplotlib.pyplot as plt
 from PIL import Image
 
 from configs import hf_token, prompt_formats, llm_domains
 import torch.nn.functional as F
 
-from transformers import LlavaNextProcessor, LlavaNextForConditionalGeneration
 from data_generator.data_loader import DataCreator
+from deepseek_vl2.models import DeepseekVLV2Processor, DeepseekVLV2ForCausalLM
+from deepseek_vl2.utils.io import load_pil_images
+from transformers import AutoModelForCausalLM
 from data_generator.data_helper import construct_prompt
-from transformers import AutoProcessor, AutoModelForImageTextToText
-from transformers import AutoModel, AutoTokenizer
-from model_helper import load_image
 
 
 def save_checkpoint(save_dir, model_name, data_dict, step_num=None):
@@ -59,25 +52,12 @@ def check_im_size(image):
 
 
 def load_model(model_path):
-    if "llava" in model_path:
-        processor = LlavaNextProcessor.from_pretrained(model_path)
-        model = LlavaNextForConditionalGeneration.from_pretrained(
-            model_path, torch_dtype=torch.float16, low_cpu_mem_usage=True, token=hf_token)
-    elif "Qwen" in model_path:
-        min_pixels = 256 * 28 * 28
-        max_pixels = 1280 * 28 * 28
-        processor = AutoProcessor.from_pretrained(model_path, min_pixels=min_pixels, max_pixels=max_pixels)
-        model = AutoModelForImageTextToText.from_pretrained(model_path)
-    elif "InternVL2" in model_path:
-        model = AutoModel.from_pretrained(
-                model_path,
-                torch_dtype=torch.bfloat16,
-                low_cpu_mem_usage=True,
-                use_flash_attn=True,
-                trust_remote_code=True).eval().cuda()
-        processor = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True, use_fast=False)
+    vl_chat_processor = DeepseekVLV2Processor.from_pretrained(model_path)
 
-    return processor, model
+    vl_gpt: DeepseekVLV2ForCausalLM = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True)
+    vl_gpt = vl_gpt.to(torch.bfloat16).cuda().eval()
+
+    return vl_chat_processor, vl_gpt
 
 
 
@@ -101,44 +81,53 @@ def run(args):
     for ds in tqdm.tqdm(ds_creator.get(args.dataset_type), total=len(ds_creator)):
         for example in tqdm.tqdm(ds):
             if "mmmu" in args.task_name:
-                images = [example[f"image_{i}"] for i in range(1, 8) if example[f"image_{i}"] is not None]
+                images = [example[f"image_{i}"].convert("RGB") for i in range(1, 8) if example[f"image_{i}"] is not None]
             else:
-                images = [example["image"]]
+                images = [example["image"].convert("RGB")]
 
             if len(images) != 1 or example.get("question_type", "multiple-choice") == "open":
                 continue
 
-            if "InternVL2" not in args.model_name:
-                res_dict = construct_prompt(
-                    example, config=prompt_formats, processor=processor, ds_name=args.task_name
-                    )
-                
-                inputs = processor(
-                    images=check_im_size(images[0]), 
-                    text=[res_dict["prompt"]], 
-                    return_tensors="pt").to("cuda")
-                
-                output = model.generate(
-                    **inputs, 
-                    max_new_tokens=100, 
-                    temperature=0.7, 
-                    return_dict_in_generate=True, 
-                    output_scores=True
-                    )
-                
-                output_txt = processor.decode(output["sequences"][0], skip_special_tokens=True)
-            else:
-                res_dict = construct_prompt(
-                    example, config=prompt_formats, processor=None, ds_name=args.task_name
-                )
-                generation_config = dict(max_new_tokens=100, return_dict_in_generate=True, output_scores=True)
-                pixel_values = load_image(images[0]).to(torch.bfloat16).cuda()
-                output = model.chat(processor, pixel_values, res_dict["prompt"], generation_config)
-                output_txt = processor.decode(output["sequences"][0], skip_special_tokens=True)
+            res_dict = construct_prompt(
+                example, config=prompt_formats, processor=None, ds_name=args.task_name
+            )
 
-            # output_txt = output_txt[-7:]
+            conversation = [
+                {
+                    "role": "<|User|>",
+                    "content": f"<image>\n<|ref|>{res_dict['prompt'].replace('<image>', '')}<|/ref|>"
+                },
+                {"role": "<|Assistant|>", "content": ""},
+            ]
+
+            prepare_inputs = processor(
+                conversations=conversation,
+                images=images,
+                force_batchify=True,
+                system_prompt="").to(model.device)
+            
+            inputs_embeds = model.prepare_inputs_embeds(**prepare_inputs)
+            output = model.language.generate(
+                inputs_embeds=inputs_embeds,
+                attention_mask=prepare_inputs.attention_mask,
+                pad_token_id=processor.tokenizer.eos_token_id,
+                bos_token_id=processor.tokenizer.bos_token_id,
+                eos_token_id=processor.tokenizer.eos_token_id,
+                max_new_tokens=100,
+                do_sample=True,
+                return_dict_in_generate=True,
+                output_scores=True,
+                temperature=0.7
+            )
+            
+            output_txt = processor.decode(output["sequences"][0], skip_special_tokens=True)
+
             probs_first_token = torch.nn.functional.softmax(output["scores"][0], dim=-1)
-            token_ids = [processor.encode(f"({letter}")[1] for letter in res_dict["prediction_range"]]
+            
+            if "(" in output_txt:
+                token_ids = [processor.encode(f"({letter}")[1] for letter in res_dict["prediction_range"]]
+            else:
+                token_ids = [processor.encode(f"{letter}")[1] for letter in res_dict["prediction_range"]]
             choice_probs.append(probs_first_token[0, token_ids])
             generated_outputs.append(output_txt)
             questions.append(example["question"])
@@ -172,8 +161,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='inference scripts for the trained models')
     parser.add_argument("--task_name", type=str, default="mmmu_pro", 
                         choices=["ocr", "okvqa", "mmmu", "mmmu_pro"])
-    parser.add_argument("--model_name", type=str, default="InternVL2-8B",
-                        choices=["llava-v1.6-vicuna-7b-hf", "llava-v1.6-vicuna-13b-hf", "Qwen2.5-VL-7B-Instruct", "InternVL2-8B"])
+    parser.add_argument("--model_name", type=str, default="deepseek-vl2-small",
+                        choices=["llava-v1.6-vicuna-7b-hf", "llava-v1.6-vicuna-13b-hf",
+                                  "Qwen2.5-VL-7B-Instruct", "InternVL2-8B", "deepseek-vl2-tiny", "deepseek-vl2-small"])
     parser.add_argument("--dataset_type", type= str, default="test", choices=["test", "validation", "train"])
     parser.add_argument("--num_samples", type=int, default=15000)
     arguments = parser.parse_args()
