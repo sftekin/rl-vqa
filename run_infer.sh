@@ -2,7 +2,7 @@
 
 # Default values (can be overridden by command-line arguments)
 TASK_NAME="mmmu"
-MODEL_NAME="deepseek-vl2-tiny"
+MODEL_NAME="deepseek-vl2-small"
 DATASET_TYPE="validation"
 NUM_SAMPLES=1500
 
