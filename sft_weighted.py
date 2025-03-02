@@ -146,7 +146,7 @@ def run(args):
     data = load_infer_prob_data(model_names, args.task_name, args.dataset_type)
     space_size = (data.shape[1] - 1) // len(model_names)
 
-    test_data = load_infer_prob_data(model_names, "mmmu_pro", "test")
+    test_data = load_infer_prob_data(model_names, "okvqa", "validation")
     # test_data = load_infer_prob_data(model_names, "okvqa", "validation")
 
     rand_idx = np.random.permutation(len(data))
@@ -160,7 +160,7 @@ def run(args):
 
     train_loader = DataLoader(split["train"], batch_size=args.batch_size, shuffle=True)
     val_loader = DataLoader(split["val"], batch_size=args.batch_size, shuffle=True)
-    novel_loader = DataLoader(split["test"], batch_size=args.batch_size, shuffle=True)
+    novel_loader = DataLoader(split["test"], batch_size=args.batch_size, shuffle=False)
 
     train_ensemble(model_names, train_loader, val_loader, novel_loader,
                    n_epochs=500, save_dir="results/ensemble",
@@ -170,10 +170,10 @@ def run(args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='inference scripts for the trained models')
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--task_name", type=str, default="mmmu",
+    parser.add_argument("--task_name", type=str, default="okvqa",
                         choices=["okvqa", "mmmu", "mmmu_pro"])
     parser.add_argument('--model_ids', default="234", type=str)
-    parser.add_argument("--dataset_type", type= str, default="validation", 
+    parser.add_argument("--dataset_type", type= str, default="train", 
                         choices=["test", "validation", "train"])
     parser.add_argument('--batch_size', default=16, type=int)
     arguments = parser.parse_args()
