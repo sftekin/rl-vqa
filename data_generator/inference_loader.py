@@ -8,7 +8,6 @@ infer_dir = "results/inference"
 
 
 def load_infer_prob_data(model_names, task_name, ds_split):
-
     prob_data = []
     labels = None
     for mn in model_names:
@@ -41,4 +40,19 @@ def load_infer_prob_data(model_names, task_name, ds_split):
 
     return data
 
+
+
+def load_infer_open_data(model_names, task_name, ds_split):
+    model_outputs = []
+    answers = []
+    questions = []
+    for mn in model_names:
+        data_path = os.path.join(infer_dir, task_name, ds_split, f"{mn}_output.csv")
+        data_df = pd.read_csv(data_path, index_col=0)
+        model_outputs.append(data_df["generated_outputs"].values)
+        answers = data_df["answer"].values
+        questions = data_df["question"].values
+    model_outputs = np.array(model_outputs).T
+
+    return model_outputs, questions, answers
 

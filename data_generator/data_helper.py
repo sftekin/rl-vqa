@@ -78,3 +78,17 @@ def construct_prompt(sample, config, processor, ds_name):
     return res_dict
 
 
+
+
+def construct_open_ended_prompt(question, config, processor=None):
+    empty_prompt_sample_structure = config['short_ans_example_format']
+    empty_prompt = empty_prompt_sample_structure.format(question)
+    if processor is not None:
+        prompt = apply_processor(
+                processor=processor, text=empty_prompt)
+    else:
+        prompt = empty_prompt
+    res_dict = {
+        "prompt": prompt
+    }
+    return res_dict
