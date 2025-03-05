@@ -50,9 +50,10 @@ def load_infer_open_data(model_names, task_name, ds_split):
         data_path = os.path.join(infer_dir, task_name, ds_split, f"{mn}_output.csv")
         data_df = pd.read_csv(data_path, index_col=0)
         model_outputs.append(data_df["generated_outputs"].values)
-        answers = data_df["answer"].values
-        questions = data_df["question"].values
-    model_outputs = np.array(model_outputs).T
+        if len(answers) == 0:
+            answers = data_df["answer"].tolist()
+            questions = data_df["question"].tolist()
+    model_outputs = np.array(model_outputs)
 
     return model_outputs, questions, answers
 

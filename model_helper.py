@@ -1,3 +1,6 @@
+import re
+import nltk
+from nltk.metrics.scores import f_measure
 import numpy as np
 import torch
 import torchvision.transforms as T
@@ -82,3 +85,26 @@ def load_image(image, input_size=448, max_num=12):
 
 
 
+def calc_metric(labels, pred_arr):
+    blue_scores, em_scores, F1 = [], [], []
+    for i in range(len(labels)):
+        pred = str(pred_arr[i]).strip().split(" ")
+        blue_scores.append(nltk.translate.bleu_score.
+                           sentence_bleu([labels[i].split(" ")], pred,
+                                         weights=(1, 0, 0, 0)))
+
+        reference_set = set(labels[i].split(" "))
+        test_set = set(pred)
+        F1.append(f_measure(reference_set, test_set))
+
+        pred = " ".join(pred)
+        ans = re.sub(r"[()]", "", labels[i]).split(" ")
+
+        txt_wo_prn = re.sub(r'\([^)]*\)', '', labels[i])
+        txt_with_prn = ans
+        if txt_wo_prn == pred or txt_with_prn == pred:
+            em_scores.append(1)
+        else:
+            em_scores.append(0)
+
+    return np.mean(blue_scores), np.mean(em_scores), np.mean(F1)
