@@ -13,7 +13,7 @@ from torch.utils.data import Dataset, DataLoader
 
 from configs import RESULT_DIR
 from transformers import get_scheduler
-from data_generator.inference_loader import load_infer_open_data
+from data_generator.inference_loader import load_infer_open_data, load_infer_mc_data
 from transformers import AutoTokenizer, AutoModelForSeq2SeqLM
 from model_helper import calc_metric
 
@@ -62,7 +62,7 @@ class MyDataset(Dataset):
 
 
 
-def tokenize_inputs(tokenizer, in_data, questions, in_label, task_name, skip_model_outs=False):
+def tokenize_inputs(tokenizer, in_data, questions, in_label, skip_model_outs=False):
     if len(in_data.shape) == 3:
         M, N, K = in_data.shape
     elif len(in_data.shape) == 2:
@@ -153,20 +153,26 @@ def run(args):
     ens_model_n = "allenai/led-base-16384"
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-    train_outs, train_q, train_lbl = load_infer_open_data(model_names, args.task_name, ds_split="train")
-    val_outs, val_q, val_lbl = load_infer_open_data(model_names, args.task_name, ds_split="validation")
-    test_outs, test_q, test_lbl = load_infer_open_data(model_names, args.task_name, ds_split="test")
+    train_outs, train_q, train_lbl = load_infer_mc_data(model_names, "okvqa", ds_split="train")
+
+    num_train_samples = len(train_lbl)
+    train_size = int(num_train_samples * 0.7)
+    val_outs, val_q, val_lbl = train_outs[:, train_size:], train_q[train_size:], train_lbl[train_size:]
+    train_outs, train_q, train_lbl = train_outs[:, :train_size], train_q[:train_size], train_lbl[:train_size]
+
+    test_outs, test_q, test_lbl = load_infer_mc_data(model_names, "okvqa", ds_split="validation")
+
+    # train_outs, train_q, train_lbl = load_infer_open_data(model_names, args.task_name, ds_split="train")
+    # val_outs, val_q, val_lbl = load_infer_open_data(model_names, args.task_name, ds_split="validation")
+    # test_outs, test_q, test_lbl = load_infer_open_data(model_names, args.task_name, ds_split="test")
 
     tokenizer = AutoTokenizer.from_pretrained(ens_model_n)
     train_inputs, train_labels, new_token_ids = tokenize_inputs(tokenizer, train_outs, train_q, train_lbl,
-                                                                skip_model_outs=False,
-                                                                task_name=args.task_name)
+                                                                skip_model_outs=False)
     val_inputs, val_labels, _ = tokenize_inputs(tokenizer, val_outs, val_q, val_lbl,
-                                                            skip_model_outs=False,
-                                                            task_name=args.task_name)
+                                                            skip_model_outs=False)
     test_inputs, test_labels, _ = tokenize_inputs(tokenizer, test_outs, test_q, test_lbl,
-                                                  skip_model_outs=False,
-                                                  task_name=args.task_name)
+                                                  skip_model_outs=False)
 
 
     train_dataset = MyDataset(train_inputs, train_labels.input_ids,
@@ -248,8 +254,8 @@ if __name__ == '__main__':
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num_epochs", type=int, default=5)
     parser.add_argument("--task_name", type=str, default="ocr",
-                        choices=["ocr"])
-    parser.add_argument('--model_ids', default="0124", type=str)
+                        choices=["mmmu"])
+    parser.add_argument('--model_ids', default="123", type=str)
     parser.add_argument('--batch_size', default=16, type=int)
     arguments = parser.parse_args()
     run(arguments)
