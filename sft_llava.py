@@ -2,6 +2,7 @@ import os
 import argparse
 import tqdm
 import copy
+import json
 
 from configs import hf_token, HF_CACHE, llm_domains
 os.environ['HF_HOME'] = HF_CACHE
@@ -26,6 +27,8 @@ from data_generator.data_loader import DataCreator
 from trl import SFTTrainer
 import transformers
 from trl import SFTConfig
+from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
+from qwen_vl_utils import process_vision_info
 
 
 IGNORE_INDEX = -100
@@ -97,7 +100,7 @@ def tokenize_inputs(processor, model_outputs, questions, labels, images):
         empty_prompt = prompt_formats["ensemble_instruct_format"]
         text = ""
         for j in range(M):
-            text += f"Model-{j+1} thinks that the answer is {model_outputs[j, i]}\n"
+            text += f"model-{j+1}: {model_outputs[j, i]}\n"
         empty_prompt = empty_prompt.format(questions[i], text)
         conversation = [
             {
@@ -115,7 +118,9 @@ def tokenize_inputs(processor, model_outputs, questions, labels, images):
             conversation, tokenize=False, add_generation_prompt=True)
         ens_prompts.append(prompt)
 
-    combined_text = [f"{s} {t}" for (s, t) in zip(ens_prompts, labels)]
+    # image_inputs = [process_vision_info(im)[0] for im in images]
+
+    combined_text = [s + t + "###END" for (s, t) in zip(ens_prompts, labels)]
     model_inputs = processor(
                 images=images, 
                 text=combined_text, 
@@ -163,17 +168,25 @@ def run(args, training_args):
     np.random.seed(args.seed)
     model_names = [model_mapper_dict[int(i)] for i in args.model_ids]
     input_dir = os.path.join(RESULT_DIR, args.task_name)
-    model_path = f"llava-hf/llava-v1.6-vicuna-7b-hf"
+    # model_path = f"llava-hf/llava-v1.6-vicuna-7b-hf"
+    model_path = "Qwen/Qwen2-VL-7B-Instruct"
+    # model_path = "Qwen2-VL-7B-Instruct/checkpoint-930"
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     train_outs, train_q, train_lbl = load_infer_open_data(model_names, args.task_name, ds_split="train")
     val_outs, val_q, val_lbl = load_infer_open_data(model_names, args.task_name, ds_split="validation")
     test_outs, test_q, test_lbl = load_infer_open_data(model_names, args.task_name, ds_split="test")
 
-    processor = LlavaNextProcessor.from_pretrained(model_path)
-    model = LlavaNextForConditionalGeneration.from_pretrained(
-        model_path, torch_dtype=torch.float16, low_cpu_mem_usage=True, token=hf_token
+    # processor = LlavaNextProcessor.from_pretrained(model_path)
+    # model = LlavaNextForConditionalGeneration.from_pretrained(
+    #     model_path, torch_dtype=torch.float16, low_cpu_mem_usage=True, token=hf_token
+    # )
+    model = Qwen2VLForConditionalGeneration.from_pretrained(
+        model_path,
+        device_map=device,
+        torch_dtype=torch.bfloat16,
     )
+    processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
     peft_config = LoraConfig(
             lora_alpha=16,
             lora_dropout=0.05,
@@ -183,39 +196,52 @@ def run(args, training_args):
             task_type="CAUSAL_LM", 
     )
 
-
     train_images = get_images(args.task_name, "train", len(train_lbl))
-    # val_images = get_images(args.task_name, "validation", len(val_lbl))
-    # test_images = get_images(args.task_name, "test", len(test_lbl))
+    val_images = get_images(args.task_name, "validation", len(val_lbl))
+    test_images = get_images(args.task_name, "test", len(test_lbl))
 
     train_dataset = InstructDataset(train_outs, train_q, train_lbl, train_images)
-    # val_dataset = InstructDataset(val_outs, val_q, val_lbl, val_images)
-    # test_dataset =  InstructDataset(test_outs, test_q, test_lbl, test_images)
+    val_dataset = InstructDataset(val_outs, val_q, val_lbl, val_images)
+    test_dataset =  InstructDataset(test_outs, test_q, test_lbl, test_images)
 
     data_collator = DataCollatorForInstructDataset(processor)
 
     model.train()
     # model.print_trainable_parameters()
     sft_args = SFTConfig(
-        output_dir="qwen2-7b-instruct-amazon-description", # directory to save and repository id
-        num_train_epochs=3,                     # number of training epochs
-        per_device_train_batch_size=4,          # batch size per device during training
-        gradient_accumulation_steps=8,          # number of steps before performing a backward/update pass
-        gradient_checkpointing=True,            # use gradient checkpointing to save memory
-        optim="adamw_torch_fused",              # use fused adamw optimizer
-        logging_steps=5,                       # log every 10 steps
-        save_strategy="epoch",                  # save checkpoint every epoch
-        learning_rate=2e-5,                     # learning rate, based on QLoRA paper
-        # bf16=True,                              # use bfloat16 precision
-        fp16=True,
-        tf32=True,                              # use tf32 precision
-        max_grad_norm=None,                      # max gradient norm based on QLoRA paper
-        warmup_ratio=0.03,                      # warmup ratio based on QLoRA paper
-        lr_scheduler_type="constant",           # use constant learning rate scheduler
-        push_to_hub=False,                       # push model to hub
-        gradient_checkpointing_kwargs = {"use_reentrant": False}, # use reentrant checkpointing
-        # dataset_text_field="", # need a dummy field for collator
-        dataset_kwargs = {"skip_prepare_dataset": True}, # important for collator
+        output_dir="qwen2-7b-instruct-trl-sft-ChartQA",  # Directory to save the model
+        num_train_epochs=3,  # Number of training epochs
+        per_device_train_batch_size=4,  # Batch size for training
+        per_device_eval_batch_size=4,  # Batch size for evaluation
+        gradient_accumulation_steps=8,  # Steps to accumulate gradients
+        gradient_checkpointing=True,  # Enable gradient checkpointing for memory efficiency
+        # Optimizer and scheduler settings
+        optim="adamw_torch_fused",  # Optimizer type
+        learning_rate=2e-4,  # Learning rate for training
+        lr_scheduler_type="constant",  # Type of learning rate scheduler
+        # Logging and evaluation
+        logging_steps=10,  # Steps interval for logging
+        eval_steps=10,  # Steps interval for evaluation
+        eval_strategy="steps",  # Strategy for evaluation
+        save_strategy="steps",  # Strategy for saving the model
+        save_steps=20,  # Steps interval for saving
+        metric_for_best_model="eval_loss",  # Metric to evaluate the best model
+        greater_is_better=False,  # Whether higher metric values are better
+        load_best_model_at_end=True,  # Load the best model after training
+        # Mixed precision and gradient settings
+        bf16=True,  # Use bfloat16 precision
+        tf32=True,  # Use TensorFloat-32 precision
+        max_grad_norm=0.3,  # Maximum norm for gradient clipping
+        warmup_ratio=0.03,  # Ratio of total steps for warmup
+        # Hub and reporting
+        # push_to_hub=True,  # Whether to push model to Hugging Face Hub
+        # report_to="wandb",  # Reporting tool for tracking metrics
+        # Gradient checkpointing settings
+        gradient_checkpointing_kwargs={"use_reentrant": False},  # Options for gradient checkpointing
+        # Dataset configuration
+        dataset_text_field="",  # Text field in dataset
+        dataset_kwargs={"skip_prepare_dataset": True},  # Additional dataset options
+        # max_seq_length=1024  # Maximum sequence length for input
         dataloader_pin_memory=False
     )
     sft_args.remove_unused_columns=False
@@ -224,18 +250,54 @@ def run(args, training_args):
             args=sft_args,
             train_dataset=train_dataset,
             data_collator=data_collator,
+            eval_dataset=val_dataset,
             # dataset_text_field="", # needs dummy value
             peft_config=peft_config,
             tokenizer=processor.tokenizer,
         )
     trainer.train()
 
+    trainer.save_state()
+    final_model_dir = os.path.join("results", "ens_models", f"llava_instruct")
+    if not os.path.exists(final_model_dir):
+        os.makedirs(final_model_dir)
+
+    # logging.info(f"Saving model into {final_model_dir}")
+    model.save_pretrained(final_model_dir)
+
+    print("Generating test outputs...")
+    test_outs = []
+    model.to("cuda")
+    for test_sample in tqdm.tqdm(test_dataset):
+        test_sample["model_outputs"] = np.expand_dims(test_sample["model_outputs"], 1)
+        data_dict = tokenize_inputs(processor, **test_sample)
+        data_dict = {k: v.to("cuda") for k, v in data_dict.items()}
+        data_dict["attention_mask"] = data_dict["input_ids"].ne(processor.tokenizer.pad_token_id).int()
+        output = model.generate(
+            **data_dict, 
+            max_new_tokens=30, 
+            temperature=0.1, 
+            return_dict_in_generate=True, 
+            output_scores=True
+            )
+        output_txt = processor.decode(output["sequences"][0], skip_special_tokens=True)
+        # print(output_txt)
+        # output_txt = output_txt.split("ASSISTANT: ")[-1]
+        test_outs.append(output_txt)
+    
+    output_path = "test_outputs_end.json"
+
+    # Save the outputs to a JSON file
+    with open(output_path, 'w') as f:
+        json.dump(test_outs, f, indent=4)
+
+    print(f"Test outputs saved to {output_path}")
 
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='inference scripts for the trained models')
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num_epochs", type=int, default=5)
+    parser.add_argument("--num_epochs", type=int, default=15)
     parser.add_argument("--task_name", type=str, default="ocr",
                         choices=["mmmu"])
     parser.add_argument('--model_ids', default="123", type=str)
