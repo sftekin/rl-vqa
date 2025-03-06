@@ -19,6 +19,7 @@ llm_domains = {
 
 prompt_formats = {
     "multi_choice_example_format": "{}\n{}\nAnswer with the option's letter from the given choices directly.",
-    "short_ans_example_format": "{}\nAnswer the question using a single word or phrase."
+    "short_ans_example_format": "{}\nAnswer the question using a single word or phrase.",
+    "ensemble_instruct_format": "{}\n{}\nAnswer the question using a single word or phrase based on given model thoughts."
 }
 
