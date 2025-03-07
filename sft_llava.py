@@ -182,29 +182,29 @@ def run(args, training_args):
     np.random.seed(args.seed)
     model_names = [model_mapper_dict[int(i)] for i in args.model_ids]
     input_dir = os.path.join(RESULT_DIR, args.task_name)
-    # model_path = f"llava-hf/llava-v1.6-vicuna-7b-hf"
+    model_path = f"llava-hf/llava-v1.6-vicuna-7b-hf"
     # model_path = "Qwen/Qwen2.5-VL-7B-Instruct"
-    model_path = "Qwen/Qwen2-VL-7B-Instruct"
-    # model_path = "qwen2-7b-instruct-trl-sft-ChartQA/checkpoint-279"
+    # model_path = "Qwen/Qwen2-VL-7B-Instruct"
+    # model_path = "Qwen2.5-VL-7B-Instruct/checkpoint-279"
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     train_outs, train_q, train_lbl = load_infer_open_data(model_names, args.task_name, ds_split="train")
     val_outs, val_q, val_lbl = load_infer_open_data(model_names, args.task_name, ds_split="validation")
     test_outs, test_q, test_lbl = load_infer_open_data(model_names, args.task_name, ds_split="test")
 
-    # processor = LlavaNextProcessor.from_pretrained(model_path)
-    # model = LlavaNextForConditionalGeneration.from_pretrained(
-    #     model_path, torch_dtype=torch.float16, low_cpu_mem_usage=True, token=hf_token
-    # )
-    model = Qwen2VLForConditionalGeneration.from_pretrained(
-        model_path,
-        device_map=device,
-        torch_dtype=torch.bfloat16,
+    processor = LlavaNextProcessor.from_pretrained(model_path)
+    model = LlavaNextForConditionalGeneration.from_pretrained(
+        model_path, torch_dtype=torch.float16, low_cpu_mem_usage=True, token=hf_token
     )
-    processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
+    # model = Qwen2VLForConditionalGeneration.from_pretrained(
+    #     model_path,
+    #     device_map=device,
+    #     torch_dtype=torch.bfloat16,
+    # )
+    # processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
     # min_pixels = 256 * 28 * 28
     # max_pixels = 1280 * 28 * 28
-    # processor = AutoProcessor.from_pretrained(model_path, min_pixels=min_pixels, max_pixels=max_pixels)
+    # processor = AutoProcessor.from_pretrained("Qwen/Qwen2.5-VL-7B-Instruct", min_pixels=min_pixels, max_pixels=max_pixels)
     # model = AutoModelForImageTextToText.from_pretrained(model_path)
     peft_config = LoraConfig(
             lora_alpha=16,
@@ -226,9 +226,10 @@ def run(args, training_args):
     data_collator = DataCollatorForInstructDataset(processor)
 
     model.train()
+    model_n = model_path.split("/")[1]
     # model.print_trainable_parameters()
     sft_args = SFTConfig(
-        output_dir="qwen2-7b-instruct-trl-sft-ChartQA",  # Directory to save the model
+        output_dir=model_n,  # Directory to save the model
         num_train_epochs=3,  # Number of training epochs
         per_device_train_batch_size=4,  # Batch size for training
         per_device_eval_batch_size=4,  # Batch size for evaluation
@@ -276,13 +277,13 @@ def run(args, training_args):
         )
     trainer.train()
 
-    trainer.save_state()
-    final_model_dir = os.path.join("results", "ens_models", f"llava_instruct")
-    if not os.path.exists(final_model_dir):
-        os.makedirs(final_model_dir)
+    # trainer.save_state()
+    # final_model_dir = os.path.join("results", "ens_models", f"llava_instruct")
+    # if not os.path.exists(final_model_dir):
+    #     os.makedirs(final_model_dir)
 
-    # logging.info(f"Saving model into {final_model_dir}")
-    model.save_pretrained(final_model_dir)
+    # # logging.info(f"Saving model into {final_model_dir}")
+    # model.save_pretrained(final_model_dir)
 
     print("Generating test outputs...")
     test_outs = []
@@ -307,7 +308,7 @@ def run(args, training_args):
         # output_txt = output_txt.split("ASSISTANT: ")[-1]
         test_outs.append(output_txt.split("assistant\n")[-1])
     
-    output_path = "test_outputs_more_trained_splitted.json"
+    output_path = f"test_outputs_{model_n}.json"
 
     # Save the outputs to a JSON file
     with open(output_path, 'w') as f:

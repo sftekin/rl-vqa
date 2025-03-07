@@ -163,7 +163,7 @@ def run(args):
     novel_loader = DataLoader(split["test"], batch_size=args.batch_size, shuffle=False)
 
     train_ensemble(model_names, train_loader, val_loader, novel_loader,
-                   n_epochs=500, save_dir="results/ensemble",
+                   n_epochs=300, save_dir="results/ensemble",
                    space_size=space_size, verbose=True)
 
 
@@ -172,7 +172,7 @@ if __name__ == '__main__':
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--task_name", type=str, default="okvqa",
                         choices=["okvqa", "mmmu", "mmmu_pro"])
-    parser.add_argument('--model_ids', default="234", type=str)
+    parser.add_argument('--model_ids', default="123", type=str)
     parser.add_argument("--dataset_type", type= str, default="train", 
                         choices=["test", "validation", "train"])
     parser.add_argument('--batch_size', default=16, type=int)

@@ -153,18 +153,18 @@ def run(args):
     ens_model_n = "allenai/led-base-16384"
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
-    train_outs, train_q, train_lbl = load_infer_mc_data(model_names, "okvqa", ds_split="train")
+    # train_outs, train_q, train_lbl = load_infer_mc_data(model_names, "okvqa", ds_split="train")
 
-    num_train_samples = len(train_lbl)
-    train_size = int(num_train_samples * 0.7)
-    val_outs, val_q, val_lbl = train_outs[:, train_size:], train_q[train_size:], train_lbl[train_size:]
-    train_outs, train_q, train_lbl = train_outs[:, :train_size], train_q[:train_size], train_lbl[:train_size]
+    # num_train_samples = len(train_lbl)
+    # train_size = int(num_train_samples * 0.7)
+    # val_outs, val_q, val_lbl = train_outs[:, train_size:], train_q[train_size:], train_lbl[train_size:]
+    # train_outs, train_q, train_lbl = train_outs[:, :train_size], train_q[:train_size], train_lbl[:train_size]
 
-    test_outs, test_q, test_lbl = load_infer_mc_data(model_names, "okvqa", ds_split="validation")
+    # test_outs, test_q, test_lbl = load_infer_mc_data(model_names, "okvqa", ds_split="validation")
 
-    # train_outs, train_q, train_lbl = load_infer_open_data(model_names, args.task_name, ds_split="train")
-    # val_outs, val_q, val_lbl = load_infer_open_data(model_names, args.task_name, ds_split="validation")
-    # test_outs, test_q, test_lbl = load_infer_open_data(model_names, args.task_name, ds_split="test")
+    train_outs, train_q, train_lbl = load_infer_open_data(model_names, args.task_name, ds_split="train")
+    val_outs, val_q, val_lbl = load_infer_open_data(model_names, args.task_name, ds_split="validation")
+    test_outs, test_q, test_lbl = load_infer_open_data(model_names, args.task_name, ds_split="test")
 
     tokenizer = AutoTokenizer.from_pretrained(ens_model_n)
     train_inputs, train_labels, new_token_ids = tokenize_inputs(tokenizer, train_outs, train_q, train_lbl,
@@ -255,7 +255,7 @@ if __name__ == '__main__':
     parser.add_argument("--num_epochs", type=int, default=5)
     parser.add_argument("--task_name", type=str, default="ocr",
                         choices=["mmmu"])
-    parser.add_argument('--model_ids', default="123", type=str)
+    parser.add_argument('--model_ids', default="234", type=str)
     parser.add_argument('--batch_size', default=16, type=int)
     arguments = parser.parse_args()
     run(arguments)
