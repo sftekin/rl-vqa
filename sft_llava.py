@@ -22,13 +22,14 @@ from transformers import get_scheduler
 from data_generator.inference_loader import load_infer_open_data, load_infer_mc_data
 from model_helper import calc_metric
 from peft import LoraConfig, get_peft_model
-from configs import prompt_formats
+from configs import prompt_formats, system_message
 from data_generator.data_loader import DataCreator
 from trl import SFTTrainer
 import transformers
 from trl import SFTConfig
 from transformers import Qwen2VLForConditionalGeneration, Qwen2VLProcessor
 from qwen_vl_utils import process_vision_info
+from transformers import AutoProcessor, AutoModelForImageTextToText
 
 
 IGNORE_INDEX = -100
@@ -88,12 +89,12 @@ class DataCollatorForInstructDataset:
         data_dict = tokenize_inputs(
             self.processor, **merged_dict
         )
-        data_dict["attention_mask"] = data_dict["input_ids"].ne(self.processor.tokenizer.pad_token_id).int()
+        # data_dict["attention_mask"] = data_dict["input_ids"].ne(self.processor.tokenizer.pad_token_id).int()
         return data_dict
 
 
 
-def tokenize_inputs(processor, model_outputs, questions, labels, images):
+def tokenize_inputs(processor, model_outputs, questions, labels, images, return_labels=True):
     M, N = model_outputs.shape
     ens_prompts = []
     for i in range(N):
@@ -101,46 +102,59 @@ def tokenize_inputs(processor, model_outputs, questions, labels, images):
         text = ""
         for j in range(M):
             text += f"model-{j+1}: {model_outputs[j, i]}\n"
-        empty_prompt = empty_prompt.format(questions[i], text)
+        # empty_prompt = empty_prompt.format(questions[i], text)
         conversation = [
             {
-            "role": "user",
-            "content": [
-                {"type": "image"},
-                {
-                    "type": "text", 
-                    "text": empty_prompt
-                },
+                "role": "system",
+                "content": [{"type": "text", "text": system_message}],
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image",
+                        "image": images[i],
+                    },
+                    {
+                        "type": "text",
+                        "text": questions[i] + f"Candidate Model outputs:\n{text}"
+                    },
                 ],
             },
+            {
+                "role": "assistant",
+                "content": [{"type": "text", "text": labels[i]}],
+            },
         ]
+        if not return_labels:
+            conversation = conversation[:2]
         prompt = processor.apply_chat_template(
             conversation, tokenize=False, add_generation_prompt=True)
         ens_prompts.append(prompt)
 
-    # image_inputs = [process_vision_info(im)[0] for im in images]
+    # Tokenize the texts and process the images
+    batch = processor(
+        text=ens_prompts, images=images, return_tensors="pt", padding=True
+    )  # Encode texts and images into tensors
 
-    combined_text = [s + t + "###END" for (s, t) in zip(ens_prompts, labels)]
-    model_inputs = processor(
-                images=images, 
-                text=combined_text, 
-                return_tensors="pt",
-                padding="longest",
-                truncation=True).to("cuda")
-    input_ids = model_inputs["input_ids"]
-    lbl = copy.deepcopy(input_ids)
+    if return_labels:
+        # The labels are the input_ids, and we mask the padding tokens in the loss computation
+        labels = batch["input_ids"].clone()  # Clone input IDs for labels
+        labels[labels == processor.tokenizer.pad_token_id] = -100  # Mask padding tokens in labels
 
-    source_tokens = processor(
-            images=images, 
-            text=ens_prompts, 
-            return_tensors="pt",
-            padding=True,
-            truncation=True).to("cuda")
-    target_indices = source_tokens["input_ids"].ne(processor.tokenizer.pad_token_id).sum(dim=1)
-    for i, idx in enumerate(target_indices):
-        lbl[i, :idx] = IGNORE_INDEX
-    lbl[labels == processor.tokenizer.pad_token_id] = IGNORE_INDEX
-    return dict(input_ids=input_ids, labels=lbl)
+        # Ignore the image token index in the loss computation (model specific)
+        if isinstance(processor, Qwen2VLProcessor):  # Check if the processor is Qwen2VLProcessor
+            image_tokens = [151652, 151653, 151655]  # Specific image token IDs for Qwen2VLProcessor
+        else:
+            image_tokens = [processor.tokenizer.convert_tokens_to_ids(processor.image_token)]  # Convert image token to ID
+
+        # Mask image token IDs in the labels
+        for image_token_id in image_tokens:
+            labels[labels == image_token_id] = -100  # Mask image token IDs in labels
+
+        batch["labels"] = labels  # Add labels to the batch
+
+    return batch
 
 
 def check_im_size(image):
@@ -169,8 +183,9 @@ def run(args, training_args):
     model_names = [model_mapper_dict[int(i)] for i in args.model_ids]
     input_dir = os.path.join(RESULT_DIR, args.task_name)
     # model_path = f"llava-hf/llava-v1.6-vicuna-7b-hf"
+    # model_path = "Qwen/Qwen2.5-VL-7B-Instruct"
     model_path = "Qwen/Qwen2-VL-7B-Instruct"
-    # model_path = "Qwen2-VL-7B-Instruct/checkpoint-930"
+    # model_path = "qwen2-7b-instruct-trl-sft-ChartQA/checkpoint-279"
     device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
 
     train_outs, train_q, train_lbl = load_infer_open_data(model_names, args.task_name, ds_split="train")
@@ -187,6 +202,10 @@ def run(args, training_args):
         torch_dtype=torch.bfloat16,
     )
     processor = Qwen2VLProcessor.from_pretrained("Qwen/Qwen2-VL-7B-Instruct")
+    # min_pixels = 256 * 28 * 28
+    # max_pixels = 1280 * 28 * 28
+    # processor = AutoProcessor.from_pretrained(model_path, min_pixels=min_pixels, max_pixels=max_pixels)
+    # model = AutoModelForImageTextToText.from_pretrained(model_path)
     peft_config = LoraConfig(
             lora_alpha=16,
             lora_dropout=0.05,
@@ -221,10 +240,10 @@ def run(args, training_args):
         lr_scheduler_type="constant",  # Type of learning rate scheduler
         # Logging and evaluation
         logging_steps=10,  # Steps interval for logging
-        eval_steps=10,  # Steps interval for evaluation
+        eval_steps=30,  # Steps interval for evaluation
         eval_strategy="steps",  # Strategy for evaluation
         save_strategy="steps",  # Strategy for saving the model
-        save_steps=20,  # Steps interval for saving
+        save_steps=60,  # Steps interval for saving
         metric_for_best_model="eval_loss",  # Metric to evaluate the best model
         greater_is_better=False,  # Whether higher metric values are better
         load_best_model_at_end=True,  # Load the best model after training
@@ -270,9 +289,12 @@ def run(args, training_args):
     model.to("cuda")
     for test_sample in tqdm.tqdm(test_dataset):
         test_sample["model_outputs"] = np.expand_dims(test_sample["model_outputs"], 1)
-        data_dict = tokenize_inputs(processor, **test_sample)
+        test_sample["questions"] = [test_sample["questions"]]
+        test_sample["labels"] = [test_sample["labels"]]
+        test_sample["images"] = [test_sample["images"]]
+        data_dict = tokenize_inputs(processor, **test_sample, return_labels=False)
         data_dict = {k: v.to("cuda") for k, v in data_dict.items()}
-        data_dict["attention_mask"] = data_dict["input_ids"].ne(processor.tokenizer.pad_token_id).int()
+        # data_dict["attention_mask"] = data_dict["input_ids"].ne(processor.tokenizer.pad_token_id).int()
         output = model.generate(
             **data_dict, 
             max_new_tokens=30, 
@@ -283,9 +305,9 @@ def run(args, training_args):
         output_txt = processor.decode(output["sequences"][0], skip_special_tokens=True)
         # print(output_txt)
         # output_txt = output_txt.split("ASSISTANT: ")[-1]
-        test_outs.append(output_txt)
+        test_outs.append(output_txt.split("assistant\n")[-1])
     
-    output_path = "test_outputs_end.json"
+    output_path = "test_outputs_more_trained_splitted.json"
 
     # Save the outputs to a JSON file
     with open(output_path, 'w') as f:
@@ -297,7 +319,7 @@ def run(args, training_args):
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='inference scripts for the trained models')
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num_epochs", type=int, default=15)
+    parser.add_argument("--num_epochs", type=int, default=3)
     parser.add_argument("--task_name", type=str, default="ocr",
                         choices=["mmmu"])
     parser.add_argument('--model_ids', default="123", type=str)
